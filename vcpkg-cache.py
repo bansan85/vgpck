@@ -48,7 +48,9 @@ root.geometry("800x600")
 
 # Package selection
 tk.Label(root, text="Package:").grid(row=0, column=0, padx=5, pady=5)
-package_combo = ttk.Combobox(root, values=list(database.keys()), state="readonly")
+sorted_packages = list(database.keys())
+sorted_packages.sort()
+package_combo = ttk.Combobox(root, values=sorted_packages, state="readonly")
 package_combo.grid(row=0, column=1, padx=5, pady=5)
 
 # Date selections
