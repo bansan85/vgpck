@@ -121,8 +121,51 @@ def update_table(event: tk.Event) -> None:
         for key, val in sorted(dict1.items()):
             tree.insert("", "end", values=(key, val, ""))
 
+
+def on_double_click(event: tk.Event):
+    item = tree.selection()
+    if not item:
+        return
+
+    values = tree.item(item[0], "values")
+    if not values:
+        return
+
+    key = values[0]
+    sha1 = values[1]
+    sha2 = values[2]
+
+    # Check if key is a package name in result
+    if key not in database:
+        return
+
+    # Find dates matching sha1 and sha2
+    dates = sorted(database[key].keys())
+    date1 = None
+    date2 = None
+
+    for date in dates:
+        abi_dict = database[key][date]
+        # Assuming sha is stored in a specific key, adjust as needed
+        for _, abi_value in abi_dict.items():
+            if sha1 and abi_value == sha1:
+                date1 = date
+            if sha2 and abi_value == sha2:
+                date2 = date
+
+    if date1 and date2:
+        package_combo.set(key)
+        update_dates(event, skip_save=True)
+
+        if date1:
+            date1_combo.set(date1.strftime("%Y-%m-%d %H:%M:%S"))
+        if date2:
+            date2_combo.set(date2.strftime("%Y-%m-%d %H:%M:%S"))
+
+        update_table(event, skip_save=True)
 package_combo.bind("<<ComboboxSelected>>", update_dates)
 date1_combo.bind("<<ComboboxSelected>>", update_table)
 date2_combo.bind("<<ComboboxSelected>>", update_table)
+tree.bind("<Double-1>", on_double_click)
 
 root.mainloop()
