@@ -77,6 +77,11 @@ date1_combo.grid(row=1, column=1, padx=5, pady=5)
 tk.Label(root, text="Date 2:").grid(row=2, column=0, padx=5, pady=5)
 date2_combo = ttk.Combobox(root, state="readonly")
 date2_combo.grid(row=2, column=1, padx=5, pady=5)
+var_data2_same_tripler = tk.BooleanVar()
+data2_same_tripler = ttk.Checkbutton(
+    root, text="Same triplet", variable=var_data2_same_tripler
+)
+data2_same_tripler.grid(row=2, column=2, padx=5, pady=5)
 
 # Table
 columns = ("Key", "Value 1", "Value 2")
@@ -144,9 +149,35 @@ def update_dates(event: tk.Event, skip_save: bool = False) -> None:
         date1_combo["values"] = date_strs
         date_strs.insert(0, "")
         date2_combo["values"] = date_strs
-        date1_combo.set("")
-        date2_combo.set("")
+        update_date2(event, skip_save)
+
+
+def update_date2(event: tk.Event, skip_save: bool = False) -> None:
+    pkg = package_combo.get()
+    if pkg and pkg in database:
+        dates = sorted(database[pkg].keys())
+
+        if var_data2_same_tripler.get() and date1_combo.get() != "":
+            date_strs = [
+                d.strftime("%Y-%m-%d %H:%M:%S")
+                for d in dates
+                if database[pkg][
+                    datetime.strptime(date1_combo.get(), "%Y-%m-%d %H:%M:%S")
+                ]["triplet"]
+                == database[pkg][d]["triplet"]
+            ]
+        else:
+            date_strs = [d.strftime("%Y-%m-%d %H:%M:%S") for d in dates]
+        date_strs.insert(0, "")
+        date2_str = date2_combo.get()
+        date2_combo["values"] = date_strs
+        if date2_str in date_strs:
+            date2_combo.set(date2_str)
+        else:
+            date2_combo.set("")
         tree.delete(*tree.get_children())
+
+    update_table(event, skip_save)
 
 
 def update_table(event: tk.Event, skip_save: bool = False) -> None:
@@ -230,9 +261,10 @@ def on_double_click(event: tk.Event):
 
 
 package_combo.bind("<<ComboboxSelected>>", update_dates)
-date1_combo.bind("<<ComboboxSelected>>", update_table)
+date1_combo.bind("<<ComboboxSelected>>", update_date2)
 date2_combo.bind("<<ComboboxSelected>>", update_table)
 tree.bind("<Double-1>", on_double_click)
+var_data2_same_tripler.trace_add("write", lambda *args: update_date2(None))
 
 update_nav_buttons()
 
