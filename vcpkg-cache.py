@@ -68,9 +68,11 @@ class VcpkgArchives:
         self.database = database
 
     def sorted_packages(self):
-        sorted_packages = list(self.database.keys())
-        sorted_packages.sort()
-        return sorted_packages
+        return sorted(list(self.database.keys()))
+
+    def get_dates(self, package: str):
+        dates = sorted(vcpkg_archives.database[package].keys())
+        return [d.strftime("%Y-%m-%d %H:%M:%S") for d in dates]
 
 
 class HistoryStruct(NamedTuple):
@@ -90,14 +92,16 @@ class History:
             HistoryStruct(package="", date1="", date2="")
         ]
         self.history_index = tk.IntVar(value=0)
-        self._keep_save = True
+        self._recurrent_save = 0
 
     def save_state(self, state: HistoryStruct):
-        if not self._keep_save:
+        if self._recurrent_save != 0:
             return
         self.stack[self.history_index.get() + 1 :] = []
         self.stack.append(state)
+        self._recurrent_save += 1
         self.history_index.set(len(self.stack) - 1)
+        self._recurrent_save -= 1
 
     def length(self):
         return len(self.stack)
@@ -109,14 +113,14 @@ class History:
         return self.stack[i]
 
     def increment(self):
-        self._keep_save = False
+        self._recurrent_save += 1
         self.history_index.set(self.history_index.get() + 1)
-        self._keep_save = True
+        self._recurrent_save -= 1
 
     def decrement(self):
-        self._keep_save = False
+        self._recurrent_save += 1
         self.history_index.set(self.history_index.get() - 1)
-        self._keep_save = True
+        self._recurrent_save -= 1
 
     def can_increment(self):
         return self.history_index.get() >= self.length() - 1
@@ -126,9 +130,6 @@ class History:
 
     def trace_add(self, callback: Callable[[str, str, str], object]):
         self.history_index.trace_add("write", callback=callback)
-
-    def keep_save(self, value: bool):
-        self._keep_save = not value
 
 
 history = History()
@@ -170,9 +171,10 @@ package_combo.grid(row=0, column=1, padx=5, pady=5)
 
 
 def trace_package_combo(var: str, index: str, mode: str):
-    history.save_state(
-        HistoryStruct(package=package_combo_var.get(), date1="", date2="")
-    )
+    pkg = package_combo_var.get()
+    if pkg and pkg in vcpkg_archives.database:
+        date1_combo["values"] = vcpkg_archives.get_dates(pkg)
+    history.save_state(HistoryStruct(package=pkg, date1="", date2=""))
 
 
 def trace_package_combo_form_history_index(var: str, index: str, mode: str):
@@ -182,17 +184,69 @@ def trace_package_combo_form_history_index(var: str, index: str, mode: str):
 package_combo_var.trace_add(mode="write", callback=trace_package_combo)
 history.trace_add(trace_package_combo_form_history_index)
 
-# tk.Label(root, text="Date 1:").grid(row=1, column=0, padx=5, pady=5)
-# date1_combo = ttk.Combobox(root, state="readonly")
-# date1_combo.grid(row=1, column=1, padx=5, pady=5)
+tk.Label(root, text="Date 1:").grid(row=1, column=0, padx=5, pady=5)
+date1_combo_var = tk.StringVar()
+date1_combo = ttk.Combobox(root, state="readonly", textvariable=date1_combo_var)
+date1_combo.grid(row=1, column=1, padx=5, pady=5)
 
-# tk.Label(root, text="Date 2:").grid(row=2, column=0, padx=5, pady=5)
-# date2_combo = ttk.Combobox(root, state="readonly")
-# date2_combo.grid(row=2, column=1, padx=5, pady=5)
-var_data2_same_tripler = tk.BooleanVar()
-data2_same_tripler = ttk.Checkbutton(
-    root, text="Same triplet", variable=var_data2_same_tripler
-)
+
+def trace_date1_combo(var: str, index: str, mode: str):
+    history.save_state(
+        HistoryStruct(
+            package=package_combo_var.get(), date1=date1_combo_var.get(), date2=""
+        )
+    )
+    # if var_data2_same_tripler.get() and date1_combo.get() != "":
+    #     date_strs = [
+    #         d.strftime("%Y-%m-%d %H:%M:%S")
+    #         for d in dates
+    #         if database[pkg][
+    #             datetime.strptime(date1_combo.get(), "%Y-%m-%d %H:%M:%S")
+    #         ]["triplet"]
+    #         == database[pkg][d]["triplet"]
+    #     ]
+    # else:
+    date_strs = list(date1_combo["values"])
+    date_strs.insert(0, "")
+    date2_combo["values"] = date_strs
+
+
+def trace_date1_combo_form_history_index(var: str, index: str, mode: str):
+    date1_combo_var.set(history.current().date1)
+
+
+date1_combo_var.trace_add(mode="write", callback=trace_date1_combo)
+history.trace_add(trace_date1_combo_form_history_index)
+
+
+tk.Label(root, text="Date 2:").grid(row=2, column=0, padx=5, pady=5)
+date2_combo_var = tk.StringVar()
+date2_combo = ttk.Combobox(root, state="readonly", textvariable=date2_combo_var)
+date2_combo.grid(row=2, column=1, padx=5, pady=5)
+
+
+def trace_date2_combo(var: str, index: str, mode: str):
+    history.save_state(
+        HistoryStruct(
+            package=package_combo_var.get(),
+            date1=date1_combo_var.get(),
+            date2=date2_combo_var.get(),
+        )
+    )
+
+
+def trace_date2_combo_form_history_index(var: str, index: str, mode: str):
+    date2_combo_var.set(history.current().date2)
+
+
+date2_combo_var.trace_add(mode="write", callback=trace_date2_combo)
+history.trace_add(trace_date2_combo_form_history_index)
+
+
+# var_data2_same_tripler = tk.BooleanVar()
+# data2_same_tripler = ttk.Checkbutton(
+#     root, text="Same triplet", variable=var_data2_same_tripler
+# )
 # data2_same_tripler.grid(row=2, column=2, padx=5, pady=5)
 
 # # Table
