@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from collections.abc import Callable
 
 binary_cache = os.getenv("VCPKG_DEFAULT_BINARY_CACHE")
-binary_cache = R"\\wsl$\Ubuntu-24.04\home\vlegarrec\.cache\vcpkg\archives"
+# binary_cache = R"\\wsl$\Ubuntu-24.04\home\vlegarrec\.cache\vcpkg\archives"
 if binary_cache is None:  # type: ignore
     print("VCPKG_DEFAULT_BINARY_CACHE environment variable is not set.")
     sys.exit(0)
@@ -24,11 +24,12 @@ class VcpkgArchives:
 
     def read_archives(self):
         zip_files = list(Path(self.path).rglob("*.zip"))
-        database: Dict[str, Dict[datetime, SimpleNamespace]] = {}
+        # Dict[package_name, Dict[date, abi_field]]
+        database: Dict[str, Dict[str, SimpleNamespace]] = {}
         for f in zip_files:
             with ZipFile(f, "r") as zf:
                 info = zf.getinfo("BUILD_INFO")
-                dt = datetime(*info.date_time)
+                dt = datetime(*info.date_time).strftime("%Y-%m-%d %H:%M:%S")
 
                 content = zf.read("CONTROL").decode("utf-8")
 
@@ -72,13 +73,14 @@ class VcpkgArchives:
 
     def get_dates(self, package: str):
         dates = sorted(vcpkg_archives.database[package].keys())
-        return [d.strftime("%Y-%m-%d %H:%M:%S") for d in dates]
+        return [d for d in dates]
 
 
 class HistoryStruct(NamedTuple):
     package: str
     date1: str
     date2: str
+    same_triplet: bool
 
 
 vcpkg_archives = VcpkgArchives(binary_cache)
@@ -89,7 +91,7 @@ root = tk.Tk()
 class History:
     def __init__(self):
         self.stack: List[HistoryStruct] = [
-            HistoryStruct(package="", date1="", date2="")
+            HistoryStruct(package="", date1="", date2="", same_triplet=False)
         ]
         self.history_index = tk.IntVar(value=0)
         self._recurrent_save = 0
@@ -120,6 +122,12 @@ class History:
     def decrement(self):
         self._recurrent_save += 1
         self.history_index.set(self.history_index.get() - 1)
+        self._recurrent_save -= 1
+
+    def disabled(self):
+        self._recurrent_save += 1
+
+    def enabled(self):
         self._recurrent_save -= 1
 
     def can_increment(self):
@@ -160,7 +168,7 @@ next_button.configure(state="disabled")
 history.trace_add(trace_next_button_state)
 
 tk.Label(root, text="Package:").grid(row=0, column=0, padx=5, pady=5)
-package_combo_var = tk.StringVar()
+package_combo_var = tk.StringVar(value="")
 package_combo = ttk.Combobox(
     root,
     values=vcpkg_archives.sorted_packages(),
@@ -174,7 +182,24 @@ def trace_package_combo(var: str, index: str, mode: str):
     pkg = package_combo_var.get()
     if pkg and pkg in vcpkg_archives.database:
         date1_combo["values"] = vcpkg_archives.get_dates(pkg)
-    history.save_state(HistoryStruct(package=pkg, date1="", date2=""))
+    if (
+        not pkg in vcpkg_archives.database
+        or not date1_combo.get() in vcpkg_archives.database[pkg]
+    ):
+        date1_combo_var.set("")
+    if (
+        not pkg in vcpkg_archives.database
+        or not date2_combo.get() in vcpkg_archives.database[pkg]
+    ):
+        date2_combo_var.set("")
+    history.save_state(
+        HistoryStruct(
+            package=pkg,
+            date1=date1_combo_var.get(),
+            date2=date2_combo_var.get(),
+            same_triplet=data2_same_triplet_var.get(),
+        )
+    )
 
 
 def trace_package_combo_form_history_index(var: str, index: str, mode: str):
@@ -185,30 +210,42 @@ package_combo_var.trace_add(mode="write", callback=trace_package_combo)
 history.trace_add(trace_package_combo_form_history_index)
 
 tk.Label(root, text="Date 1:").grid(row=1, column=0, padx=5, pady=5)
-date1_combo_var = tk.StringVar()
+date1_combo_var = tk.StringVar(value="")
 date1_combo = ttk.Combobox(root, state="readonly", textvariable=date1_combo_var)
 date1_combo.grid(row=1, column=1, padx=5, pady=5)
 
 
 def trace_date1_combo(var: str, index: str, mode: str):
+    history.disabled()
+    pkg = package_combo_var.get()
+    if (
+        not pkg in vcpkg_archives.database
+        or not date2_combo.get() in vcpkg_archives.database[pkg]
+    ):
+        date2_combo_var.set("")
+    history.enabled()
     history.save_state(
         HistoryStruct(
-            package=package_combo_var.get(), date1=date1_combo_var.get(), date2=""
+            package=pkg,
+            date1=date1_combo_var.get(),
+            date2=date2_combo_var.get(),
+            same_triplet=data2_same_triplet_var.get(),
         )
     )
-    # if var_data2_same_tripler.get() and date1_combo.get() != "":
-    #     date_strs = [
-    #         d.strftime("%Y-%m-%d %H:%M:%S")
-    #         for d in dates
-    #         if database[pkg][
-    #             datetime.strptime(date1_combo.get(), "%Y-%m-%d %H:%M:%S")
-    #         ]["triplet"]
-    #         == database[pkg][d]["triplet"]
-    #     ]
-    # else:
-    date_strs = list(date1_combo["values"])
+    dates: List[str] = list(date1_combo["values"])
+    if data2_same_triplet_var.get() and date1_combo.get() != "":
+        date_strs = [
+            d
+            for d in dates
+            if vcpkg_archives.database[pkg][date1_combo.get()].triplet
+            == vcpkg_archives.database[pkg][d].triplet
+        ]
+    else:
+        date_strs = dates
     date_strs.insert(0, "")
+    history.disabled()
     date2_combo["values"] = date_strs
+    history.enabled()
 
 
 def trace_date1_combo_form_history_index(var: str, index: str, mode: str):
@@ -220,7 +257,7 @@ history.trace_add(trace_date1_combo_form_history_index)
 
 
 tk.Label(root, text="Date 2:").grid(row=2, column=0, padx=5, pady=5)
-date2_combo_var = tk.StringVar()
+date2_combo_var = tk.StringVar(value="")
 date2_combo = ttk.Combobox(root, state="readonly", textvariable=date2_combo_var)
 date2_combo.grid(row=2, column=1, padx=5, pady=5)
 
@@ -231,6 +268,7 @@ def trace_date2_combo(var: str, index: str, mode: str):
             package=package_combo_var.get(),
             date1=date1_combo_var.get(),
             date2=date2_combo_var.get(),
+            same_triplet=data2_same_triplet_var.get(),
         )
     )
 
@@ -243,11 +281,43 @@ date2_combo_var.trace_add(mode="write", callback=trace_date2_combo)
 history.trace_add(trace_date2_combo_form_history_index)
 
 
-# var_data2_same_tripler = tk.BooleanVar()
-# data2_same_tripler = ttk.Checkbutton(
-#     root, text="Same triplet", variable=var_data2_same_tripler
-# )
-# data2_same_tripler.grid(row=2, column=2, padx=5, pady=5)
+data2_same_triplet_var = tk.BooleanVar(value=False)
+data2_same_triplet = ttk.Checkbutton(
+    root, text="Same triplet", variable=data2_same_triplet_var
+)
+data2_same_triplet.grid(row=2, column=2, padx=5, pady=5)
+
+
+def trace_same_triplet(var: str, index: str, mode: str):
+    if (
+        data2_same_triplet_var.get()
+        and date1_combo_var.get() != ""
+        and date2_combo_var.get() != ""
+        and vcpkg_archives.database[package_combo_var.get()][
+            date1_combo_var.get()
+        ].triplet
+        != vcpkg_archives.database[package_combo_var.get()][
+            date2_combo_var.get()
+        ].triplet
+    ):
+        date2_combo_var.set("")
+    history.save_state(
+        HistoryStruct(
+            package=package_combo_var.get(),
+            date1=date1_combo_var.get(),
+            date2=date2_combo_var.get(),
+            same_triplet=data2_same_triplet_var.get(),
+        )
+    )
+
+
+def trace_same_triplet_form_history_index(var: str, index: str, mode: str):
+    data2_same_triplet_var.set(history.current().same_triplet)
+
+
+data2_same_triplet_var.trace_add(mode="write", callback=trace_same_triplet)
+history.trace_add(trace_same_triplet_form_history_index)
+
 
 # # Table
 # columns = ("Key", "Value 1", "Value 2")
@@ -324,7 +394,7 @@ def navigate(direction: int):
 #     if pkg and pkg in database:
 #         dates = sorted(database[pkg].keys())
 
-#         if var_data2_same_tripler.get() and date1_combo.get() != "":
+#         if data2_same_triplet_var.get() and date1_combo.get() != "":
 #             date_strs = [
 #                 d.strftime("%Y-%m-%d %H:%M:%S")
 #                 for d in dates
@@ -431,7 +501,7 @@ def navigate(direction: int):
 # date1_combo.bind("<<ComboboxSelected>>", update_date2)
 # date2_combo.bind("<<ComboboxSelected>>", update_table)
 # tree.bind("<Double-1>", on_double_click)
-# var_data2_same_tripler.trace_add("write", lambda *args: update_date2(None))
+# data2_same_triplet_var.trace_add("write", lambda *args: update_date2(None))
 
 # update_nav_buttons()
 
