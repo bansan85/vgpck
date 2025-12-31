@@ -177,24 +177,27 @@ package_combo.grid(row=0, column=1, padx=5, pady=5)
 
 def trace_package_combo(var: str, index: str, mode: str):
     pkg = package_combo_var.get()
+    _, date1_str, date2_str, triplet = history.current()
+    history.disabled()
     if pkg and pkg in vcpkg_archives.database:
         date1_combo["values"] = vcpkg_archives.get_dates(pkg)
     if (
         not pkg in vcpkg_archives.database
-        or not date1_combo_var.get() in vcpkg_archives.database[pkg]
+        or not date1_str in vcpkg_archives.database[pkg]
     ):
         date1_combo_var.set("")
     if (
         not pkg in vcpkg_archives.database
-        or not date2_combo_var.get() in vcpkg_archives.database[pkg]
+        or not date2_str in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
+    history.enabled()
     history.save_state(
         HistoryStruct(
             package=pkg,
-            date1=date1_combo_var.get(),
-            date2=date2_combo_var.get(),
-            same_triplet=data2_same_triplet_var.get(),
+            date1=date1_str,
+            date2=date2_str,
+            same_triplet=triplet,
         )
     )
 
@@ -213,25 +216,27 @@ date1_combo.grid(row=1, column=1, padx=5, pady=5)
 
 
 def trace_date1_combo(var: str, index: str, mode: str):
+    date1_str = date1_combo_var.get()
+    pkg, _, date2_str, triplet = history.current()
+
     history.disabled()
-    pkg = package_combo_var.get()
     if (
         not pkg in vcpkg_archives.database
-        or not date2_combo_var.get() in vcpkg_archives.database[pkg]
+        or not date2_str in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
     dates: List[str] = list(date1_combo["values"])
-    if data2_same_triplet_var.get() and date1_combo_var.get() != "":
+    if data2_same_triplet_var.get() and date1_str != "":
         date_strs = [
             d
             for d in dates
-            if vcpkg_archives.database[pkg][date1_combo_var.get()].triplet
+            if vcpkg_archives.database[pkg][date1_str].triplet
             == vcpkg_archives.database[pkg][d].triplet
         ]
         if (
-            date2_combo_var.get() in vcpkg_archives.database[pkg]
-            and vcpkg_archives.database[pkg][date2_combo_var.get()].triplet
-            != vcpkg_archives.database[pkg][date1_combo_var.get()].triplet
+            date2_str in vcpkg_archives.database[pkg]
+            and vcpkg_archives.database[pkg][date2_str].triplet
+            != vcpkg_archives.database[pkg][date1_str].triplet
         ):
             date2_combo_var.set("")
 
@@ -243,9 +248,9 @@ def trace_date1_combo(var: str, index: str, mode: str):
     history.save_state(
         HistoryStruct(
             package=pkg,
-            date1=date1_combo_var.get(),
-            date2=date2_combo_var.get(),
-            same_triplet=data2_same_triplet_var.get(),
+            date1=date1_str,
+            date2=date2_str,
+            same_triplet=triplet,
         )
     )
 
@@ -420,9 +425,7 @@ def navigate(direction: int):
 
 
 def update_table(var: str, index: str, mode: str):
-    pkg = package_combo_var.get()
-    date1_str = date1_combo_var.get()
-    date2_str = date2_combo_var.get()
+    pkg, date1_str, date2_str, _ = history.current()
 
     tree.delete(*tree.get_children())
 
@@ -454,54 +457,61 @@ def update_table(var: str, index: str, mode: str):
 history.trace_add(update_table)
 
 
-# def on_double_click(event: tk.Event):
-#     item = tree.selection()
-#     if not item:
-#         return
+def on_double_click(event: tk.Event):
+    item = tree.selection()
+    if not item:
+        return
 
-#     values = tree.item(item[0], "values")
-#     if not values:
-#         return
+    values = tree.item(item[0], "values")
+    if not values:
+        return
 
-#     key = values[0]
-#     sha1 = values[1]
-#     sha2 = values[2]
+    key = values[0]
+    sha1 = values[1]
+    sha2 = values[2]
 
-#     # Check if key is a package name in result
-#     if key not in database:
-#         return
+    # Check if key is a package name in result
+    if key not in vcpkg_archives.database:
+        return
 
-#     # Find dates matching sha1 and sha2
-#     dates = sorted(database[key].keys())
-#     date1 = None
-#     date2 = None
+    # Find dates matching sha1 and sha2
+    dates = sorted(vcpkg_archives.database[key].keys())
+    date1 = None
+    date2 = None
 
-#     for date in dates:
-#         abi_dict = database[key][date]
-#         # Assuming sha is stored in a specific key, adjust as needed
-#         for _, abi_value in abi_dict.items():
-#             if sha1 and abi_value == sha1:
-#                 date1 = date
-#             if sha2 and abi_value == sha2:
-#                 date2 = date
+    for date in dates:
+        abi_dict = vars(vcpkg_archives.database[key][date])
+        # Assuming sha is stored in a specific key, adjust as needed
+        for _, abi_value in abi_dict.items():
+            if sha1 and abi_value == sha1:
+                date1 = date
+            if sha2 and abi_value == sha2:
+                date2 = date
 
-#     if date1 and date2:
-#         package_combo.set(key)
-#         update_dates(event, skip_save=True)
+    if date1 and date2:
+        history.disabled()
+        package_combo_var.set(key)
 
-#         if date1:
-#             date1_combo.set(date1.strftime("%Y-%m-%d %H:%M:%S"))
-#         if date2:
-#             date2_combo.set(date2.strftime("%Y-%m-%d %H:%M:%S"))
+        if date1:
+            date1_combo_var.set(date1)
+        if date2:
+            date2_combo_var.set(date2)
 
-#         update_table(event, skip_save=True)
-#         save_state()
+        history.enabled()
+        history.save_state(
+            HistoryStruct(
+                package=package_combo_var.get(),
+                date1=date1_combo_var.get(),
+                date2=date2_combo_var.get(),
+                same_triplet=data2_same_triplet_var.get(),
+            )
+        )
 
 
 # package_combo.bind("<<ComboboxSelected>>", update_dates)
 # date1_combo.bind("<<ComboboxSelected>>", update_date2)
 # date2_combo.bind("<<ComboboxSelected>>", update_table)
-# tree.bind("<Double-1>", on_double_click)
+tree.bind("<Double-1>", on_double_click)
 # data2_same_triplet_var.trace_add("write", lambda *args: update_date2(None))
 
 # update_nav_buttons()
