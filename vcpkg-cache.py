@@ -158,10 +158,7 @@ def trace_next_button_state(var: str, index: str, mode: str):
 prev_button = tk.Button(root, text="< Previous", command=lambda: history.decrement())
 prev_button.grid(row=0, column=2, padx=5, pady=5)
 prev_button.configure(state="disabled")
-history.history_index.trace_add(
-    "write",
-    callback=trace_prev_button_state,
-)
+history.trace_add(trace_prev_button_state)
 next_button = tk.Button(root, text="Next >", command=lambda: history.increment())
 next_button.grid(row=0, column=3, padx=5, pady=5)
 next_button.configure(state="disabled")
@@ -184,12 +181,12 @@ def trace_package_combo(var: str, index: str, mode: str):
         date1_combo["values"] = vcpkg_archives.get_dates(pkg)
     if (
         not pkg in vcpkg_archives.database
-        or not date1_combo.get() in vcpkg_archives.database[pkg]
+        or not date1_combo_var.get() in vcpkg_archives.database[pkg]
     ):
         date1_combo_var.set("")
     if (
         not pkg in vcpkg_archives.database
-        or not date2_combo.get() in vcpkg_archives.database[pkg]
+        or not date2_combo_var.get() in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
     history.save_state(
@@ -220,9 +217,28 @@ def trace_date1_combo(var: str, index: str, mode: str):
     pkg = package_combo_var.get()
     if (
         not pkg in vcpkg_archives.database
-        or not date2_combo.get() in vcpkg_archives.database[pkg]
+        or not date2_combo_var.get() in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
+    dates: List[str] = list(date1_combo["values"])
+    if data2_same_triplet_var.get() and date1_combo_var.get() != "":
+        date_strs = [
+            d
+            for d in dates
+            if vcpkg_archives.database[pkg][date1_combo_var.get()].triplet
+            == vcpkg_archives.database[pkg][d].triplet
+        ]
+        if (
+            date2_combo_var.get() in vcpkg_archives.database[pkg]
+            and vcpkg_archives.database[pkg][date2_combo_var.get()].triplet
+            != vcpkg_archives.database[pkg][date1_combo_var.get()].triplet
+        ):
+            date2_combo_var.set("")
+
+    else:
+        date_strs = dates
+    date_strs.insert(0, "")
+    date2_combo["values"] = date_strs
     history.enabled()
     history.save_state(
         HistoryStruct(
@@ -232,20 +248,6 @@ def trace_date1_combo(var: str, index: str, mode: str):
             same_triplet=data2_same_triplet_var.get(),
         )
     )
-    dates: List[str] = list(date1_combo["values"])
-    if data2_same_triplet_var.get() and date1_combo.get() != "":
-        date_strs = [
-            d
-            for d in dates
-            if vcpkg_archives.database[pkg][date1_combo.get()].triplet
-            == vcpkg_archives.database[pkg][d].triplet
-        ]
-    else:
-        date_strs = dates
-    date_strs.insert(0, "")
-    history.disabled()
-    date2_combo["values"] = date_strs
-    history.enabled()
 
 
 def trace_date1_combo_form_history_index(var: str, index: str, mode: str):
@@ -319,20 +321,20 @@ data2_same_triplet_var.trace_add(mode="write", callback=trace_same_triplet)
 history.trace_add(trace_same_triplet_form_history_index)
 
 
-# # Table
-# columns = ("Key", "Value 1", "Value 2")
-# tree = ttk.Treeview(root, columns=columns, show="headings")
-# tree.heading("Key", text="Key")
-# tree.heading("Value 1", text="Value 1")
-# tree.heading("Value 2", text="Value 2")
-# tree.grid(row=3, column=0, columnspan=4, padx=5, pady=5, sticky="nsew")
+# Table
+columns = ("Key", "Value 1", "Value 2")
+tree = ttk.Treeview(root, columns=columns, show="headings")
+tree.heading("Key", text="Key")
+tree.heading("Value 1", text="Value 1")
+tree.heading("Value 2", text="Value 2")
+tree.grid(row=3, column=0, columnspan=4, padx=5, pady=5, sticky="nsew")
 
-# scrollbar = ttk.Scrollbar(root, orient="vertical", command=tree.yview)
-# scrollbar.grid(row=3, column=4, sticky="ns")
-# tree.configure(yscrollcommand=scrollbar.set)
+scrollbar = ttk.Scrollbar(root, orient="vertical", command=tree.yview)
+scrollbar.grid(row=3, column=4, sticky="ns")
+tree.configure(yscrollcommand=scrollbar.set)
 
-# root.grid_rowconfigure(3, weight=1)
-# root.grid_columnconfigure(1, weight=1)
+root.grid_rowconfigure(3, weight=1)
+root.grid_columnconfigure(1, weight=1)
 
 
 # def update_nav_buttons():
@@ -417,40 +419,39 @@ def navigate(direction: int):
 #     update_table(event, skip_save)
 
 
-# def update_table(event: tk.Event, skip_save: bool = False) -> None:
-#     if not skip_save:
-#         save_state()
+def update_table(var: str, index: str, mode: str):
+    pkg = package_combo_var.get()
+    date1_str = date1_combo_var.get()
+    date2_str = date2_combo_var.get()
 
-#     pkg = package_combo.get()
-#     date1_str = date1_combo.get()
-#     date2_str = date2_combo.get()
+    tree.delete(*tree.get_children())
 
-#     tree.delete(*tree.get_children())
+    if not pkg or not date1_str:
+        return
 
-#     if not pkg or not date1_str:
-#         return
+    dates = sorted(vcpkg_archives.database[pkg].keys())
 
-#     dates = sorted(database[pkg].keys())
-#     date_strs = [d.strftime("%Y-%m-%d %H:%M:%S") for d in dates]
+    date1_idx = dates.index(date1_str)
+    date1 = dates[date1_idx]
+    dict1 = vars(vcpkg_archives.database[pkg][date1])
 
-#     date1_idx = date_strs.index(date1_str)
-#     date1 = dates[date1_idx]
-#     dict1 = database[pkg][date1]
+    if date2_str:
+        date2_idx = dates.index(date2_str)
+        date2 = dates[date2_idx]
+        dict2 = vars(vcpkg_archives.database[pkg][date2])
 
-#     if date2_str:
-#         date2_idx = date_strs.index(date2_str)
-#         date2 = dates[date2_idx]
-#         dict2 = database[pkg][date2]
+        all_keys = set(dict1.keys()) | set(dict2.keys())
+        for key in sorted(all_keys):
+            val1 = dict1.get(key, "")
+            val2 = dict2.get(key, "")
+            if val1 != val2:
+                tree.insert("", "end", values=(key, val1, val2))
+    else:
+        for key, val in sorted(dict1.items()):
+            tree.insert("", "end", values=(key, val, ""))
 
-#         all_keys = set(dict1.keys()) | set(dict2.keys())
-#         for key in sorted(all_keys):
-#             val1 = dict1.get(key, "")
-#             val2 = dict2.get(key, "")
-#             if val1 != val2:
-#                 tree.insert("", "end", values=(key, val1, val2))
-#     else:
-#         for key, val in sorted(dict1.items()):
-#             tree.insert("", "end", values=(key, val, ""))
+
+history.trace_add(update_table)
 
 
 # def on_double_click(event: tk.Event):
