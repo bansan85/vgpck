@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from collections.abc import Callable
 
 binary_cache = os.getenv("VCPKG_DEFAULT_BINARY_CACHE")
-# binary_cache = R"\\wsl$\Ubuntu-24.04\home\vlegarrec\.cache\vcpkg\archives"
 if binary_cache is None:  # type: ignore
     print("VCPKG_DEFAULT_BINARY_CACHE environment variable is not set.")
     sys.exit(0)
@@ -24,7 +23,7 @@ class VcpkgArchives:
 
     def read_archives(self):
         zip_files = list(Path(self.path).rglob("*.zip"))
-        # Dict[package_name, Dict[date, abi_field]]
+        # Dict[package_name, Dict[date_of_build, abi_field]]
         database: Dict[str, Dict[str, SimpleNamespace]] = {}
         for f in zip_files:
             with ZipFile(f, "r") as zf:
@@ -342,88 +341,6 @@ root.grid_rowconfigure(3, weight=1)
 root.grid_columnconfigure(1, weight=1)
 
 
-# def update_nav_buttons():
-#     prev_button["state"] = "normal" if history_index > 0 else "disabled"
-#     next_button["state"] = "normal" if history_index < len(history) - 1 else "disabled"
-
-
-# def save_state():
-#     global history_index
-
-#     state = {
-#         "package": package_combo.get(),
-#         "date1": date1_combo.get(),
-#         "date2": date2_combo.get(),
-#     }
-
-#     history[history_index + 1 :] = []
-
-#     history.append(state)
-#     history_index = len(history) - 1
-#     update_nav_buttons()
-
-
-def navigate(direction: int):
-    global skip_save_state
-    history.increment()
-    # global history_index
-
-    # new_index: int = history_index + direction
-    # if 0 <= new_index < len(history):
-    #     history_index = new_index
-    #     state = history[history_index]
-
-    #     package_combo.set(state["package"])
-    #     update_dates(tk.Event(), skip_save=True)
-    #     date1_combo.set(state["date1"])
-    #     date2_combo.set(state["date2"])
-    #     update_table(tk.Event(), skip_save=True)
-
-    #     update_nav_buttons()
-
-
-# def update_dates(event: tk.Event, skip_save: bool = False) -> None:
-#     if not skip_save:
-#         save_state()
-
-#     pkg = package_combo.get()
-#     if pkg and pkg in database:
-#         dates = sorted(database[pkg].keys())
-#         date_strs = [d.strftime("%Y-%m-%d %H:%M:%S") for d in dates]
-#         date1_combo["values"] = date_strs
-#         date_strs.insert(0, "")
-#         date2_combo["values"] = date_strs
-#         update_date2(event, skip_save)
-
-
-# def update_date2(event: tk.Event, skip_save: bool = False) -> None:
-#     pkg = package_combo.get()
-#     if pkg and pkg in database:
-#         dates = sorted(database[pkg].keys())
-
-#         if data2_same_triplet_var.get() and date1_combo.get() != "":
-#             date_strs = [
-#                 d.strftime("%Y-%m-%d %H:%M:%S")
-#                 for d in dates
-#                 if database[pkg][
-#                     datetime.strptime(date1_combo.get(), "%Y-%m-%d %H:%M:%S")
-#                 ]["triplet"]
-#                 == database[pkg][d]["triplet"]
-#             ]
-#         else:
-#             date_strs = [d.strftime("%Y-%m-%d %H:%M:%S") for d in dates]
-#         date_strs.insert(0, "")
-#         date2_str = date2_combo.get()
-#         date2_combo["values"] = date_strs
-#         if date2_str in date_strs:
-#             date2_combo.set(date2_str)
-#         else:
-#             date2_combo.set("")
-#         tree.delete(*tree.get_children())
-
-#     update_table(event, skip_save)
-
-
 def update_table(var: str, index: str, mode: str):
     pkg, date1_str, date2_str, _ = history.current()
 
@@ -508,12 +425,6 @@ def on_double_click(event: tk.Event):
         )
 
 
-# package_combo.bind("<<ComboboxSelected>>", update_dates)
-# date1_combo.bind("<<ComboboxSelected>>", update_date2)
-# date2_combo.bind("<<ComboboxSelected>>", update_table)
 tree.bind("<Double-1>", on_double_click)
-# data2_same_triplet_var.trace_add("write", lambda *args: update_date2(None))
-
-# update_nav_buttons()
 
 root.mainloop()
