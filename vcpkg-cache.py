@@ -185,11 +185,13 @@ def trace_package_combo(var: str, index: str, mode: str):
         or not date1_str in vcpkg_archives.database[pkg]
     ):
         date1_combo_var.set("")
+        date1_str=""
     if (
         not pkg in vcpkg_archives.database
         or not date2_str in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
+        date2_str=""
     history.enabled()
     history.save_state(
         HistoryStruct(
@@ -224,6 +226,7 @@ def trace_date1_combo(var: str, index: str, mode: str):
         or not date2_str in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
+        date2_str=""
     dates: List[str] = list(date1_combo["values"])
     if data2_same_triplet_var.get() and date1_str != "":
         date_strs = [
@@ -238,6 +241,7 @@ def trace_date1_combo(var: str, index: str, mode: str):
             != vcpkg_archives.database[pkg][date1_str].triplet
         ):
             date2_combo_var.set("")
+            date2_str=""
 
     else:
         date_strs = dates
