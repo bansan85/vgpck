@@ -4,8 +4,9 @@ from zipfile import ZipFile
 from datetime import datetime
 from typing import Optional, Dict, List
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox, filedialog
 import os
+import shutil
 from typing import NamedTuple
 from types import SimpleNamespace
 from collections.abc import Callable
@@ -86,6 +87,13 @@ vcpkg_archives = VcpkgArchives(binary_cache)
 
 root = tk.Tk()
 
+notebook = ttk.Notebook(root)
+package_frame = ttk.Frame(notebook)
+cleanup_frame = ttk.Frame(notebook)
+notebook.add(package_frame, text="Package comparison")
+notebook.add(cleanup_frame, text="Cleanup")
+notebook.pack(expand=True, fill="both")
+
 
 class History:
     def __init__(self):
@@ -142,7 +150,7 @@ class History:
 history = History()
 
 
-root.title("Package Comparison")
+root.title("Vcpkg Graphical Package Control Kit")
 root.geometry("800x600")
 
 
@@ -154,19 +162,19 @@ def trace_next_button_state(var: str, index: str, mode: str):
     next_button.configure(state="normal" if not history.can_increment() else "disabled")
 
 
-prev_button = tk.Button(root, text="< Previous", command=lambda: history.decrement())
+prev_button = tk.Button(package_frame, text="< Previous", command=lambda: history.decrement())
 prev_button.grid(row=0, column=2, padx=5, pady=5)
 prev_button.configure(state="disabled")
 history.trace_add(trace_prev_button_state)
-next_button = tk.Button(root, text="Next >", command=lambda: history.increment())
+next_button = tk.Button(package_frame, text="Next >", command=lambda: history.increment())
 next_button.grid(row=0, column=3, padx=5, pady=5)
 next_button.configure(state="disabled")
 history.trace_add(trace_next_button_state)
 
-tk.Label(root, text="Package:").grid(row=0, column=0, padx=5, pady=5)
+tk.Label(package_frame, text="Package:").grid(row=0, column=0, padx=5, pady=5)
 package_combo_var = tk.StringVar(value="")
 package_combo = ttk.Combobox(
-    root,
+    package_frame,
     values=vcpkg_archives.sorted_packages(),
     state="readonly",
     textvariable=package_combo_var,
@@ -210,9 +218,9 @@ def trace_package_combo_form_history_index(var: str, index: str, mode: str):
 package_combo_var.trace_add(mode="write", callback=trace_package_combo)
 history.trace_add(trace_package_combo_form_history_index)
 
-tk.Label(root, text="Date 1:").grid(row=1, column=0, padx=5, pady=5)
+tk.Label(package_frame, text="Date 1:").grid(row=1, column=0, padx=5, pady=5)
 date1_combo_var = tk.StringVar(value="")
-date1_combo = ttk.Combobox(root, state="readonly", textvariable=date1_combo_var)
+date1_combo = ttk.Combobox(package_frame, state="readonly", textvariable=date1_combo_var)
 date1_combo.grid(row=1, column=1, padx=5, pady=5)
 
 
@@ -266,9 +274,9 @@ date1_combo_var.trace_add(mode="write", callback=trace_date1_combo)
 history.trace_add(trace_date1_combo_form_history_index)
 
 
-tk.Label(root, text="Date 2:").grid(row=2, column=0, padx=5, pady=5)
+tk.Label(package_frame, text="Date 2:").grid(row=2, column=0, padx=5, pady=5)
 date2_combo_var = tk.StringVar(value="")
-date2_combo = ttk.Combobox(root, state="readonly", textvariable=date2_combo_var)
+date2_combo = ttk.Combobox(package_frame, state="readonly", textvariable=date2_combo_var)
 date2_combo.grid(row=2, column=1, padx=5, pady=5)
 
 
@@ -293,7 +301,7 @@ history.trace_add(trace_date2_combo_form_history_index)
 
 data2_same_triplet_var = tk.BooleanVar(value=False)
 data2_same_triplet = ttk.Checkbutton(
-    root, text="Same triplet", variable=data2_same_triplet_var
+    package_frame, text="Same triplet", variable=data2_same_triplet_var
 )
 data2_same_triplet.grid(row=2, column=2, padx=5, pady=5)
 
@@ -329,20 +337,122 @@ data2_same_triplet_var.trace_add(mode="write", callback=trace_same_triplet)
 history.trace_add(trace_same_triplet_form_history_index)
 
 
+# Cleanup tab
+vcpkg_path_var = tk.StringVar(value="")
+
+def choose_vcpkg_path():
+    selected = filedialog.askdirectory(title="Select vcpkg folder")
+    if selected:
+        vcpkg_path_var.set(selected)
+
+def cleanup_buildtrees_build_only(vcpkg_path: Path):
+    buildtrees_path = vcpkg_path / "buildtrees"
+    if not buildtrees_path.exists():
+        return
+    for pkg_dir in buildtrees_path.iterdir():
+        if not pkg_dir.is_dir():
+            continue
+        for triplet_dir in pkg_dir.iterdir():
+            if not triplet_dir.is_dir():
+                continue
+            if triplet_dir.name == "src":
+                continue
+            shutil.rmtree(triplet_dir, ignore_errors=True)
+
+
+def cleanup_vcpkg():
+    path = vcpkg_path_var.get().strip()
+    if not path:
+        messagebox.showwarning("Missing path", "Please enter the vcpkg folder path.")
+        return
+    vcpkg_path = Path(path)
+    if not vcpkg_path.exists() or not vcpkg_path.is_dir():
+        messagebox.showerror("Erreur", "vcpkg folder doesn't exists.")
+        return
+
+    choices : list[str] = []
+    if downloads_var.get():
+        downloads_path = vcpkg_path / "downloads"
+        if downloads_path.exists():
+            shutil.rmtree(downloads_path, ignore_errors=True)
+            choices.append("downloads")
+    if packages_var.get():
+        packages_path = vcpkg_path / "packages"
+        if packages_path.exists():
+            shutil.rmtree(packages_path, ignore_errors=True)
+            choices.append("packages")
+    if buildtrees_build_only_var.get():
+        cleanup_buildtrees_build_only(vcpkg_path)
+        choices.append("buildtrees (build only)")
+    if buildtrees_build_and_sources_var.get():
+        buildtrees_path = vcpkg_path / "buildtrees"
+        if buildtrees_path.exists():
+            shutil.rmtree(buildtrees_path, ignore_errors=True)
+            choices.append("buildtrees (build and sources)")
+
+    message = "Done."
+    if choices:
+        message += "\nItems deleted : " + ", ".join(choices)
+    else:
+        message += "\nNo items selected."
+    messagebox.showinfo("Completed", message)
+
+
+vcpkg_label = tk.Label(cleanup_frame, text="vcpkg path :")
+vcpkg_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
+vcpkg_entry = tk.Entry(cleanup_frame, textvariable=vcpkg_path_var, width=60)
+vcpkg_entry.grid(row=0, column=1, padx=5, pady=5, sticky="we")
+
+browse_btn = tk.Button(cleanup_frame, text="Browse...", command=choose_vcpkg_path)
+browse_btn.grid(row=0, column=2, padx=5, pady=5)
+
+
+downloads_var = tk.BooleanVar(value=False)
+buildtrees_build_only_var = tk.BooleanVar(value=False)
+buildtrees_build_and_sources_var = tk.BooleanVar(value=False)
+packages_var = tk.BooleanVar(value=False)
+
+cb_downloads = tk.Checkbutton(cleanup_frame, text="downloads", variable=downloads_var)
+cb_downloads.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="w")
+
+cb_buildtrees_only = tk.Checkbutton(
+    cleanup_frame,
+    text="buildtrees (build only)",
+    variable=buildtrees_build_only_var,
+)
+cb_buildtrees_only.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="w")
+
+cb_buildtrees_both = tk.Checkbutton(
+    cleanup_frame,
+    text="buildtrees (build and sources)",
+    variable=buildtrees_build_and_sources_var,
+)
+cb_buildtrees_both.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="w")
+
+cb_packages = tk.Checkbutton(cleanup_frame, text="packages", variable=packages_var)
+cb_packages.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky="w")
+
+cleanup_button = tk.Button(cleanup_frame, text="Cleanup", command=cleanup_vcpkg)
+cleanup_button.grid(row=5, column=0, columnspan=3, padx=5, pady=10)
+
+cleanup_frame.grid_columnconfigure(1, weight=1)
+
+
 # Table
 columns = ("Key", "Value 1", "Value 2")
-tree = ttk.Treeview(root, columns=columns, show="headings")
+tree = ttk.Treeview(package_frame, columns=columns, show="headings")
 tree.heading("Key", text="Key")
 tree.heading("Value 1", text="Value 1")
 tree.heading("Value 2", text="Value 2")
 tree.grid(row=3, column=0, columnspan=4, padx=5, pady=5, sticky="nsew")
 
-scrollbar = ttk.Scrollbar(root, orient="vertical", command=tree.yview)
+scrollbar = ttk.Scrollbar(package_frame, orient="vertical", command=tree.yview)
 scrollbar.grid(row=3, column=4, sticky="ns")
 tree.configure(yscrollcommand=scrollbar.set)
 
-root.grid_rowconfigure(3, weight=1)
-root.grid_columnconfigure(1, weight=1)
+package_frame.grid_rowconfigure(3, weight=1)
+package_frame.grid_columnconfigure(1, weight=1)
 
 
 def update_table(var: str, index: str, mode: str):
