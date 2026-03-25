@@ -17,6 +17,15 @@ Easily free up disk space by selectively removing directories from your vcpkg in
 
 ![Cleanup Tab](doc/clean-tab.png)
 
+### CMake Arguments
+This feature helps you generate CMake command-line arguments to configure your projects with vcpkg integration.
+
+- **Automatic Option Detection**: The tool scans your project's CMakeLists.txt files to automatically detect available CMake options, which you can then customize as needed.
+- **Triplet Detection**: Triplets are automatically gathered from your vcpkg installation and any configured vcpkg registries, ensuring you have access to all available build configurations.
+- **Flexible Output Formats**: Generate output in command-line format for direct terminal use, or in a format compatible with VSCode's settings.json for seamless integration into your development workflow.
+
+![CMake Arguments Tab](doc/cmake-arguments-tab.png)
+
 ## Requirements
 
 - Python 3.7+

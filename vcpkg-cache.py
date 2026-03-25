@@ -3,6 +3,8 @@ import sys
 from zipfile import ZipFile
 from datetime import datetime
 from typing import Optional, Dict, List
+import re
+import json
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import os
@@ -162,11 +164,15 @@ def trace_next_button_state(var: str, index: str, mode: str):
     next_button.configure(state="normal" if not history.can_increment() else "disabled")
 
 
-prev_button = tk.Button(package_frame, text="< Previous", command=lambda: history.decrement())
+prev_button = tk.Button(
+    package_frame, text="< Previous", command=lambda: history.decrement()
+)
 prev_button.grid(row=0, column=2, padx=5, pady=5)
 prev_button.configure(state="disabled")
 history.trace_add(trace_prev_button_state)
-next_button = tk.Button(package_frame, text="Next >", command=lambda: history.increment())
+next_button = tk.Button(
+    package_frame, text="Next >", command=lambda: history.increment()
+)
 next_button.grid(row=0, column=3, padx=5, pady=5)
 next_button.configure(state="disabled")
 history.trace_add(trace_next_button_state)
@@ -193,13 +199,13 @@ def trace_package_combo(var: str, index: str, mode: str):
         or not date1_str in vcpkg_archives.database[pkg]
     ):
         date1_combo_var.set("")
-        date1_str=""
+        date1_str = ""
     if (
         not pkg in vcpkg_archives.database
         or not date2_str in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
-        date2_str=""
+        date2_str = ""
     history.enabled()
     history.save_state(
         HistoryStruct(
@@ -220,7 +226,9 @@ history.trace_add(trace_package_combo_form_history_index)
 
 tk.Label(package_frame, text="Date 1:").grid(row=1, column=0, padx=5, pady=5)
 date1_combo_var = tk.StringVar(value="")
-date1_combo = ttk.Combobox(package_frame, state="readonly", textvariable=date1_combo_var)
+date1_combo = ttk.Combobox(
+    package_frame, state="readonly", textvariable=date1_combo_var
+)
 date1_combo.grid(row=1, column=1, padx=5, pady=5)
 
 
@@ -234,7 +242,7 @@ def trace_date1_combo(var: str, index: str, mode: str):
         or not date2_str in vcpkg_archives.database[pkg]
     ):
         date2_combo_var.set("")
-        date2_str=""
+        date2_str = ""
     dates: List[str] = list(date1_combo["values"])
     if data2_same_triplet_var.get() and date1_str != "":
         date_strs = [
@@ -249,7 +257,7 @@ def trace_date1_combo(var: str, index: str, mode: str):
             != vcpkg_archives.database[pkg][date1_str].triplet
         ):
             date2_combo_var.set("")
-            date2_str=""
+            date2_str = ""
 
     else:
         date_strs = dates
@@ -276,7 +284,9 @@ history.trace_add(trace_date1_combo_form_history_index)
 
 tk.Label(package_frame, text="Date 2:").grid(row=2, column=0, padx=5, pady=5)
 date2_combo_var = tk.StringVar(value="")
-date2_combo = ttk.Combobox(package_frame, state="readonly", textvariable=date2_combo_var)
+date2_combo = ttk.Combobox(
+    package_frame, state="readonly", textvariable=date2_combo_var
+)
 date2_combo.grid(row=2, column=1, padx=5, pady=5)
 
 
@@ -340,10 +350,12 @@ history.trace_add(trace_same_triplet_form_history_index)
 # Cleanup tab
 vcpkg_path_var = tk.StringVar(value="")
 
+
 def choose_vcpkg_path():
     selected = filedialog.askdirectory(title="Select vcpkg folder")
     if selected:
         vcpkg_path_var.set(selected)
+
 
 def cleanup_buildtrees_build_only(vcpkg_path: Path):
     buildtrees_path = vcpkg_path / "buildtrees"
@@ -370,7 +382,7 @@ def cleanup_vcpkg():
         messagebox.showerror("Erreur", "vcpkg folder doesn't exists.")
         return
 
-    choices : list[str] = []
+    choices: list[str] = []
     if downloads_var.get():
         downloads_path = vcpkg_path / "downloads"
         if downloads_path.exists():
@@ -438,6 +450,442 @@ cleanup_button.grid(row=5, column=0, columnspan=3, padx=5, pady=10)
 
 cleanup_frame.grid_columnconfigure(1, weight=1)
 
+# CMake tab
+cmake_frame = ttk.Frame(notebook)
+notebook.add(cmake_frame, text="CMake arguments")
+
+cmake_project_path_var = tk.StringVar(value="")
+cmake_vcpkg_path_var = tk.StringVar(value="")
+cmake_target_triplet_var = tk.StringVar(value="")
+cmake_host_triplet_var = tk.StringVar(value="")
+cmake_host_same_var = tk.BooleanVar(value=True)
+cmake_build_shared_var = tk.BooleanVar(value=False)
+cmake_export_compile_commands_var = tk.BooleanVar(value=False)
+cmake_build_testing_var = tk.BooleanVar(value=False)
+cmake_install_prefix_var = tk.StringVar(value="")
+cmake_registry_paths: List[str] = []
+cmake_detected_options_vars: Dict[str, tk.Variable] = {}
+cmake_detected_options_types: Dict[str, str] = {}
+cmake_detected_options_defaults: Dict[str, str] = {}
+cmake_output_format_var = tk.StringVar(value="command")
+
+# common next values
+cmake_triplets: List[str] = []
+
+
+def get_triplets_from_vcpkg(vcpkg_path_str: str) -> List[str]:
+    triplets: set[str] = set()
+    if not vcpkg_path_str:
+        return []
+    p = Path(vcpkg_path_str)
+    if not p.exists():
+        return []
+    for candidates in [p / "triplets", p / "triplets" / "community"]:
+        if candidates.exists() and candidates.is_dir():
+            for f in candidates.glob("*.cmake"):
+                triplets.add(f.stem)
+    return sorted(triplets)
+
+
+def get_triplets_from_registry(registry_path_str: str) -> List[str]:
+    triplets: set[str] = set()
+    if not registry_path_str:
+        return []
+    p = Path(registry_path_str)
+    if not p.exists():
+        return []
+    for dirpath in [p / "triplets", p / "vcpkg-registry" / "triplets"]:
+        if dirpath.exists() and dirpath.is_dir():
+            for f in dirpath.glob("*.cmake"):
+                triplets.add(f.stem)
+    # also search recursively for nested triplets folders in registry layouts
+    for triplets_path in p.rglob("triplets"):
+        if triplets_path.is_dir():
+            for f in triplets_path.glob("*.cmake"):
+                triplets.add(f.stem)
+    return sorted(triplets)
+
+
+def refresh_triplets():
+    all_triplets = set(get_triplets_from_vcpkg(cmake_vcpkg_path_var.get()))
+    for rp in cmake_registry_paths:
+        all_triplets.update(get_triplets_from_registry(rp))
+    cmake_triplets.clear()
+    cmake_triplets.extend(sorted(all_triplets))
+    if cmake_triplets:
+        target_triplet_combo["values"] = cmake_triplets
+        host_triplet_combo["values"] = cmake_triplets
+    else:
+        target_triplet_combo["values"] = []
+        host_triplet_combo["values"] = []
+    update_host_triplet_state()
+
+
+def update_host_triplet_state():
+    if cmake_host_same_var.get():
+        host_triplet_combo.configure(state="disabled")
+        cmake_host_triplet_var.set(cmake_target_triplet_var.get())
+    else:
+        host_triplet_combo.configure(state="readonly")
+
+
+def host_same_changed(*args):
+    update_host_triplet_state()
+
+
+def target_triplet_changed(*args):
+    if cmake_host_same_var.get():
+        cmake_host_triplet_var.set(cmake_target_triplet_var.get())
+
+
+def select_cmake_project():
+    selected = filedialog.askdirectory(title="Select CMake project folder")
+    if selected:
+        cmake_project_path_var.set(selected)
+        detect_cmake_options()
+
+
+def select_cmake_vcpkg_path():
+    selected = filedialog.askdirectory(title="Select vcpkg folder")
+    if selected:
+        cmake_vcpkg_path_var.set(selected)
+        refresh_triplets()
+
+
+def add_registry_path():
+    selected = filedialog.askdirectory(title="Select vcpkg registry folder")
+    if not selected:
+        return
+    if selected not in cmake_registry_paths:
+        cmake_registry_paths.append(selected)
+        registries_listbox.insert(tk.END, selected)
+        refresh_triplets()
+        make_cmake_command()
+
+
+def remove_registry_path():
+    selection = registries_listbox.curselection()
+    for i in reversed(selection):
+        cmake_registry_paths.pop(i)
+        registries_listbox.delete(i)
+    refresh_triplets()
+    make_cmake_command()
+
+
+def detect_cmake_options():
+    project_path = cmake_project_path_var.get().strip()
+    for widget in detected_options_frame.winfo_children():
+        widget.destroy()
+    cmake_detected_options_vars.clear()
+    cmake_detected_options_defaults.clear()
+    if not project_path:
+        return
+    p = Path(project_path)
+    if not p.exists() or not p.is_dir():
+        return
+
+    def strip_quotes(value: str) -> str:
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            return value[1:-1]
+        return value
+
+    def cmake_split_tokens(s: str) -> List[str]:
+        tokens: List[str] = []
+        for t in re.finditer(r"\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s'\"]+))", s):
+            token = t.group(1) or t.group(2) or t.group(3) or ""
+            tokens.append(token)
+        return tokens
+
+    options: set[str] = set()
+    option_keys: set[str] = set()
+    set_keys: set[str] = set()
+    for cmake_file in p.rglob("CMakeLists.txt"):
+        try:
+            text = cmake_file.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        # option(NAME "help" OFF) with multiline support
+        for m in re.finditer(
+            r"(?is)\boption\s*\([^)]*\)",
+            text,
+        ):
+            content = m.group(0)
+            inner = re.sub(r"(?is)^option\s*\(|\)\s*$", "", content).strip()
+            tokens = cmake_split_tokens(inner)
+            if not tokens:
+                continue
+            name = strip_quotes(tokens[0])
+            if not name:
+                continue
+            default = "OFF"
+            if len(tokens) >= 3:
+                default = strip_quotes(tokens[2])
+            options.add(name)
+            option_keys.add(name)
+            cmake_detected_options_defaults[name] = default
+
+        # set(name value CACHE ...)
+        for m in re.finditer(
+            r"(?is)\bset\s*\([^)]*\bCACHE\b[^)]*\)",
+            text,
+        ):
+            content = m.group(0)
+            inner = re.sub(r"(?is)^set\s*\(|\)\s*$", "", content).strip()
+            tokens = cmake_split_tokens(inner)
+            if len(tokens) < 2:
+                continue
+            name = strip_quotes(tokens[0])
+            if not name:
+                continue
+            if name in ["CMAKE_C_FLAGS", "CMAKE_CXX_FLAGS"]:
+                continue
+            value = strip_quotes(tokens[1])
+            options.add(name)
+            set_keys.add(name)
+            cmake_detected_options_defaults[name] = value
+
+    known = [
+        "BUILD_SHARED_LIBS",
+        "CMAKE_EXPORT_COMPILE_COMMANDS",
+        "BUILD_TESTING",
+        "CMAKE_INSTALL_PREFIX",
+    ]
+    for opt in sorted(options):
+        if opt in known:
+            continue
+        if opt in option_keys:
+            default_value = cmake_detected_options_defaults.get(opt, "OFF")
+            var = tk.BooleanVar(value=str(default_value).strip().upper() in ("ON", "YES", "TRUE", "1"))
+            cmake_detected_options_types[opt] = "option"
+        else:
+            default_value = cmake_detected_options_defaults.get(opt, "")
+            var = tk.StringVar(value=default_value)
+            cmake_detected_options_types[opt] = "set"
+        cmake_detected_options_vars[opt] = var
+
+    row = 0
+    for opt, var in sorted(cmake_detected_options_vars.items()):
+        typ = cmake_detected_options_types.get(opt, "set")
+        if typ == "option":
+            cb = tk.Checkbutton(detected_options_frame, text=opt, variable=var)
+            cb.grid(row=row, column=0, columnspan=2, sticky="w", padx=2, pady=2)
+        else:
+            lbl = tk.Label(detected_options_frame, text=opt + ":")
+            lbl.grid(row=row, column=0, sticky="w", padx=2, pady=2)
+            ent = tk.Entry(detected_options_frame, textvariable=var, width=45)
+            ent.grid(row=row, column=1, sticky="w", padx=2, pady=2)
+        row += 1
+
+    detected_options_canvas.configure(scrollregion=detected_options_canvas.bbox("all"))
+
+    for var in cmake_detected_options_vars.values():
+        var.trace_add("write", lambda *args: make_cmake_command())
+
+    make_cmake_command()
+
+
+def make_cmake_command():
+    lines: list[str] = []
+    cmake_toolchain = cmake_vcpkg_path_var.get().strip()
+    if cmake_toolchain:
+        lines.append(
+            f"-DCMAKE_TOOLCHAIN_FILE={Path(cmake_toolchain) / 'scripts' / 'buildsystems' / 'vcpkg.cmake'}"
+        )
+    if cmake_registry_paths:
+        sel = ";".join(cmake_registry_paths)
+        lines.append(f"-DVCPKG_OVERLAY_TRIPLETS={sel}/triplets")
+    target = cmake_target_triplet_var.get().strip()
+    if target:
+        lines.append(f"-DVCPKG_TARGET_TRIPLET={target}")
+    if cmake_host_same_var.get():
+        if target:
+            lines.append(f"-DVCPKG_HOST_TRIPLET={target}")
+    else:
+        host = cmake_host_triplet_var.get().strip()
+        if host:
+            lines.append(f"-DVCPKG_HOST_TRIPLET={host}")
+    if cmake_build_shared_var.get():
+        lines.append("-DBUILD_SHARED_LIBS=ON")
+    else:
+        lines.append("-DBUILD_SHARED_LIBS=OFF")
+    if cmake_export_compile_commands_var.get():
+        lines.append("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+    else:
+        lines.append("-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF")
+    if cmake_build_testing_var.get():
+        lines.append("-DBUILD_TESTING=ON")
+    else:
+        lines.append("-DBUILD_TESTING=OFF")
+    prefix = cmake_install_prefix_var.get().strip()
+    if prefix:
+        lines.append(f"-DCMAKE_INSTALL_PREFIX={prefix}")
+    for opt, var in sorted(cmake_detected_options_vars.items()):
+        typ = cmake_detected_options_types.get(opt, "set")
+        if typ == "option":
+            if var.get():
+                lines.append(f"-D{opt}=ON")
+            else:
+                lines.append(f"-D{opt}=OFF")
+        else:
+            val = var.get().strip()
+            if val:
+                lines.append(f"-D{opt}={val}")
+    lines = [line.replace("\\", "/") for line in lines]
+
+    format_type = cmake_output_format_var.get()
+    if format_type == "command":
+        cmake_command = "cmake " + " \\\n".join(lines)
+    elif format_type == "json":
+        cmake_command = "\"cmake.configureArgs\":" + json.dumps(lines, indent=2)
+    else:
+        cmake_command = "cmake " + " \\\n".join(lines)
+
+    cmake_output_text.delete("1.0", tk.END)
+    cmake_output_text.insert(tk.END, cmake_command)
+
+
+def copy_cmake_command():
+    root.clipboard_clear()
+    root.clipboard_append(cmake_output_text.get("1.0", tk.END).strip())
+    messagebox.showinfo("Copied", "Output copied to clipboard")
+
+
+# CMake tab layout
+cmake_row = 0
+
+label = tk.Label(cmake_frame, text="CMake project:")
+label.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="w")
+entry = tk.Entry(cmake_frame, textvariable=cmake_project_path_var, width=70)
+entry.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="we")
+btn = tk.Button(cmake_frame, text="Browse...", command=select_cmake_project)
+btn.grid(row=cmake_row, column=2, padx=5, pady=5)
+cmake_row += 1
+
+label = tk.Label(cmake_frame, text="vcpkg path:")
+label.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="w")
+entry = tk.Entry(cmake_frame, textvariable=cmake_vcpkg_path_var, width=70)
+entry.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="we")
+btn = tk.Button(cmake_frame, text="Browse...", command=select_cmake_vcpkg_path)
+btn.grid(row=cmake_row, column=2, padx=5, pady=5)
+cmake_row += 1
+
+label = tk.Label(cmake_frame, text="vcpkg registries:")
+label.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="nw")
+registries_listbox = tk.Listbox(cmake_frame, height=4, selectmode=tk.EXTENDED)
+registries_listbox.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="we")
+btn_add_reg = tk.Button(cmake_frame, text="Add", command=add_registry_path)
+btn_add_reg.grid(row=cmake_row, column=2, padx=5, pady=2, sticky="n")
+btn_remove_reg = tk.Button(cmake_frame, text="Remove", command=remove_registry_path)
+btn_remove_reg.grid(row=cmake_row, column=2, padx=5, pady=30, sticky="n")
+cmake_row += 1
+
+label = tk.Label(cmake_frame, text="Target triplet:")
+label.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="w")
+target_triplet_combo = ttk.Combobox(
+    cmake_frame, textvariable=cmake_target_triplet_var, state="readonly"
+)
+target_triplet_combo.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="we")
+cmake_row += 1
+
+host_chk = tk.Checkbutton(
+    cmake_frame,
+    text="Host triplet equals target",
+    variable=cmake_host_same_var,
+    command=host_same_changed,
+)
+host_chk.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="w")
+
+label = tk.Label(cmake_frame, text="Host triplet:")
+label.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="w")
+host_triplet_combo = ttk.Combobox(
+    cmake_frame, textvariable=cmake_host_triplet_var, state="readonly"
+)
+host_triplet_combo.grid(row=cmake_row, column=1, padx=150, pady=5, sticky="we")
+cmake_row += 1
+
+cmake_host_same_var.trace_add("write", host_same_changed)
+cmake_target_triplet_var.trace_add("write", target_triplet_changed)
+
+cb1 = tk.Checkbutton(
+    cmake_frame, text="BUILD_SHARED_LIBS", variable=cmake_build_shared_var
+)
+cb1.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="w")
+cb2 = tk.Checkbutton(
+    cmake_frame,
+    text="CMAKE_EXPORT_COMPILE_COMMANDS",
+    variable=cmake_export_compile_commands_var,
+)
+cb2.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="w")
+cmake_row += 1
+
+cb3 = tk.Checkbutton(
+    cmake_frame, text="BUILD_TESTING", variable=cmake_build_testing_var
+)
+cb3.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="w")
+label = tk.Label(cmake_frame, text="CMAKE_INSTALL_PREFIX:")
+label.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="w")
+ent = tk.Entry(cmake_frame, textvariable=cmake_install_prefix_var, width=40)
+ent.grid(row=cmake_row, column=1, padx=160, pady=5, sticky="we")
+cmake_row += 1
+
+# Detected options container
+label = tk.Label(cmake_frame, text="Detected CMake options:")
+label.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="nw")
+detected_options_canvas = tk.Canvas(cmake_frame, height=350)
+detected_options_scrollbar = ttk.Scrollbar(
+    cmake_frame, orient="vertical", command=detected_options_canvas.yview
+)
+detected_options_canvas.configure(yscrollcommand=detected_options_scrollbar.set)
+detected_options_canvas.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="nsew")
+detected_options_scrollbar.grid(row=cmake_row, column=2, sticky="ns")
+detected_options_frame = ttk.Frame(detected_options_canvas)
+detected_options_canvas.create_window(
+    (0, 0), window=detected_options_frame, anchor="nw"
+)
+cmake_row += 1
+
+# Output format
+label = tk.Label(cmake_frame, text="Output format:")
+label.grid(row=cmake_row, column=0, padx=5, pady=5, sticky="w")
+rb_command = tk.Radiobutton(
+    cmake_frame, text="Command Line", variable=cmake_output_format_var, value="command"
+)
+rb_command.grid(row=cmake_row, column=1, padx=5, pady=5, sticky="w")
+rb_json = tk.Radiobutton(
+    cmake_frame,
+    text="VSCode settings.json",
+    variable=cmake_output_format_var,
+    value="json",
+)
+rb_json.grid(row=cmake_row, column=2, padx=5, pady=5, sticky="w")
+cmake_row += 1
+
+btn_copy = tk.Button(cmake_frame, text="Copy output", command=copy_cmake_command)
+btn_copy.grid(row=cmake_row, column=0, padx=5, pady=10, sticky="w")
+cmake_row += 1
+
+cmake_output_text = tk.Text(cmake_frame, height=8, width=100)
+cmake_output_text.grid(
+    row=cmake_row, column=0, columnspan=3, padx=5, pady=5, sticky="nsew"
+)
+
+cmake_frame.grid_rowconfigure(cmake_row, weight=1)
+cmake_frame.grid_columnconfigure(1, weight=1)
+
+cmake_project_path_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_vcpkg_path_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_target_triplet_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_host_triplet_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_host_same_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_build_shared_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_export_compile_commands_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_build_testing_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_install_prefix_var.trace_add("write", lambda *args: make_cmake_command())
+cmake_output_format_var.trace_add("write", lambda *args: make_cmake_command())
+
+make_cmake_command()
 
 # Table
 columns = ("Key", "Value 1", "Value 2")
