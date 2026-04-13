@@ -5,6 +5,11 @@ from datetime import datetime
 from typing import Optional, Dict, List
 import re
 import json
+import hashlib
+import tempfile
+import urllib.request
+import urllib.parse
+from urllib.error import HTTPError, URLError
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import os
@@ -449,6 +454,277 @@ cleanup_button = tk.Button(cleanup_frame, text="Cleanup", command=cleanup_vcpkg)
 cleanup_button.grid(row=5, column=0, columnspan=3, padx=5, pady=10)
 
 cleanup_frame.grid_columnconfigure(1, weight=1)
+
+# Port helper tab
+porthelper_frame = ttk.Frame(notebook)
+notebook.add(porthelper_frame, text="Port helper")
+
+resource_type_var = tk.StringVar(value="Github")
+
+github_url_var = tk.StringVar(value="github.com")
+github_repo_var = tk.StringVar(value="")
+github_ref_var = tk.StringVar(value="")
+github_token_var = tk.StringVar(value="")
+
+gitlab_url_var = tk.StringVar(value="gitlab.example.com")
+gitlab_repo_var = tk.StringVar(value="")
+gitlab_ref_var = tk.StringVar(value="")
+gitlab_token_var = tk.StringVar(value="")
+
+direct_url_var = tk.StringVar(value="")
+
+download_status_var = tk.StringVar(value="")
+sha512_var = tk.StringVar(value="")
+download_path_var = tk.StringVar(value="")
+
+placeholders = {
+    "github_repo": "user/repo",
+    "github_ref": "commit or tag",
+    "github_token": "optional access token",
+    "gitlab_url": "gitlab.example.com",
+    "gitlab_repo": "group/repo",
+    "gitlab_ref": "commit or tag",
+    "gitlab_token": "optional access token",
+    "direct_url": "https://example.com/archive.zip",
+}
+
+
+def apply_placeholder(entry: tk.Entry, var: tk.StringVar, placeholder: str):
+    def on_focus_in(event: tk.Event):
+        if var.get() == placeholder:
+            entry.config(fg="black")
+            var.set("")
+
+    def on_focus_out(event: tk.Event):
+        if not var.get():
+            entry.config(fg="grey")
+            var.set(placeholder)
+
+    entry.bind("<FocusIn>", on_focus_in)
+    entry.bind("<FocusOut>", on_focus_out)
+    var.set(placeholder)
+    entry.config(fg="grey")
+
+
+def get_trimmed(var: tk.StringVar, placeholder: str) -> str:
+    value = var.get().strip()
+    if value == placeholder:
+        return ""
+    return value
+
+
+def build_port_helper_url() -> tuple[str, Dict[str, str]]:
+    resource_type = resource_type_var.get()
+    headers: Dict[str, str] = {}
+    if resource_type == "Github":
+        github_url = get_trimmed(github_url_var, "github.com") or "github.com"
+        repo = get_trimmed(github_repo_var, placeholders["github_repo"])
+        ref = get_trimmed(github_ref_var, placeholders["github_ref"])
+        token = get_trimmed(github_token_var, placeholders["github_token"])
+
+        if not repo:
+            raise ValueError("Repository must be provided for Github.")
+        if not ref:
+            raise ValueError("Ref must be provided for Github.")
+
+        repo_path = "/".join(
+            urllib.parse.quote(part, safe="")
+            for part in repo.strip("/").split("/")
+        )
+        headers = {"Authorization": f"token {token}"} if token else {}
+        url = f"https://{github_url.rstrip('/')}" + f"/{repo_path}/archive/{urllib.parse.quote(ref, safe='')}" + ".tar.gz"
+        return url, headers
+
+    if resource_type == "Gitlab":
+        gitlab_url = get_trimmed(gitlab_url_var, placeholders["gitlab_url"])
+        repo = get_trimmed(gitlab_repo_var, placeholders["gitlab_repo"])
+        ref = get_trimmed(gitlab_ref_var, placeholders["gitlab_ref"])
+        token = get_trimmed(gitlab_token_var, placeholders["gitlab_token"])
+
+        if not gitlab_url:
+            raise ValueError("Gitlab URL must be provided.")
+        if not repo:
+            raise ValueError("Repository must be provided for Gitlab.")
+        if not ref:
+            raise ValueError("Ref must be provided for Gitlab.")
+
+        repo_path = "/".join(
+            urllib.parse.quote(part, safe="")
+            for part in repo.strip("/").split("/")
+        )
+        repo_name = repo.strip("/").split("/")[-1]
+        archive_name = f"{repo_name}-{ref}.tar.gz"
+        headers = {"PRIVATE-TOKEN": token} if token else {}
+        url = f"https://{gitlab_url.rstrip('/')}" + f"/{repo_path}/-/archive/{urllib.parse.quote(ref, safe='')}/{urllib.parse.quote(archive_name, safe='')}"
+        return url, headers
+
+    if resource_type == "Direct download":
+        direct_url = get_trimmed(direct_url_var, placeholders["direct_url"])
+        if not direct_url:
+            raise ValueError("Direct download URL must be provided.")
+        return direct_url, {}
+
+    raise ValueError(f"Unsupported resource type: {resource_type}")
+
+
+def show_resource_frame(*args):
+    selected = resource_type_var.get()
+    for frame in (github_frame, gitlab_frame, direct_frame):
+        frame.grid_remove()
+    if selected == "Github":
+        github_frame.grid(row=2, column=0, columnspan=3, sticky="we", padx=5, pady=5)
+    elif selected == "Gitlab":
+        gitlab_frame.grid(row=2, column=0, columnspan=3, sticky="we", padx=5, pady=5)
+    else:
+        direct_frame.grid(row=2, column=0, columnspan=3, sticky="we", padx=5, pady=5)
+
+
+def update_download_status(text: str):
+    download_status_var.set(text)
+
+
+def compute_sha512():
+    try:
+        url, headers = build_port_helper_url()
+    except ValueError as exc:
+        messagebox.showerror("Invalid input", str(exc))
+        return
+
+    update_download_status("Downloading...")
+    root.update_idletasks()
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request) as response:
+            sha512 = hashlib.sha512()
+            total = 0
+            with tempfile.NamedTemporaryFile(delete=False, prefix="porthelper_", suffix=".bin") as tmp:
+                while True:
+                    chunk = response.read(8192)
+                    if not chunk:
+                        break
+                    sha512.update(chunk)
+                    tmp.write(chunk)
+                    total += len(chunk)
+
+            sha512_value = sha512.hexdigest()
+            sha512_var.set(sha512_value)
+            download_path_var.set(tmp.name)
+            update_download_status(f"Downloaded {total} bytes")
+    except HTTPError as exc:
+        messagebox.showerror("Download failed", f"HTTP error {exc.code}: {exc.reason}")
+        update_download_status("Download failed")
+    except URLError as exc:
+        messagebox.showerror("Download failed", f"URL error: {exc.reason}")
+        update_download_status("Download failed")
+    except Exception as exc:
+        messagebox.showerror("Download failed", str(exc))
+        update_download_status("Download failed")
+
+
+def copy_sha512_to_clipboard():
+    value = sha512_var.get().strip()
+    if not value:
+        messagebox.showwarning("No SHA512", "No SHA512 value to copy.")
+        return
+    root.clipboard_clear()
+    root.clipboard_append(value)
+    messagebox.showinfo("Copied", "SHA512 copied to clipboard")
+
+
+resource_type_label = tk.Label(porthelper_frame, text="Resource type:")
+resource_type_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+resource_type_combo = ttk.Combobox(
+    porthelper_frame,
+    values=["Github", "Gitlab", "Direct download"],
+    state="readonly",
+    textvariable=resource_type_var,
+)
+resource_type_combo.grid(row=0, column=1, padx=5, pady=5, sticky="we")
+resource_type_combo.bind("<<ComboboxSelected>>", show_resource_frame)
+
+# Github fields
+github_frame = ttk.Frame(porthelper_frame)
+
+github_url_label = tk.Label(github_frame, text="Github URL:")
+github_url_label.grid(row=0, column=0, padx=5, pady=3, sticky="w")
+github_url_entry = tk.Entry(github_frame, textvariable=github_url_var, width=50)
+github_url_entry.grid(row=0, column=1, padx=5, pady=3, sticky="we")
+
+github_repo_label = tk.Label(github_frame, text="Repo:")
+github_repo_label.grid(row=1, column=0, padx=5, pady=3, sticky="w")
+github_repo_entry = tk.Entry(github_frame, textvariable=github_repo_var, width=50)
+github_repo_entry.grid(row=1, column=1, padx=5, pady=3, sticky="we")
+
+github_ref_label = tk.Label(github_frame, text="Ref:")
+github_ref_label.grid(row=2, column=0, padx=5, pady=3, sticky="w")
+github_ref_entry = tk.Entry(github_frame, textvariable=github_ref_var, width=50)
+github_ref_entry.grid(row=2, column=1, padx=5, pady=3, sticky="we")
+
+github_token_label = tk.Label(github_frame, text="Access token:")
+github_token_label.grid(row=3, column=0, padx=5, pady=3, sticky="w")
+github_token_entry = tk.Entry(github_frame, textvariable=github_token_var, width=50)
+github_token_entry.grid(row=3, column=1, padx=5, pady=3, sticky="we")
+
+# Gitlab fields
+gitlab_frame = ttk.Frame(porthelper_frame)
+
+gitlab_url_label = tk.Label(gitlab_frame, text="Gitlab URL:")
+gitlab_url_label.grid(row=0, column=0, padx=5, pady=3, sticky="w")
+gitlab_url_entry = tk.Entry(gitlab_frame, textvariable=gitlab_url_var, width=50)
+gitlab_url_entry.grid(row=0, column=1, padx=5, pady=3, sticky="we")
+
+gitlab_repo_label = tk.Label(gitlab_frame, text="Repo:")
+gitlab_repo_label.grid(row=1, column=0, padx=5, pady=3, sticky="w")
+gitlab_repo_entry = tk.Entry(gitlab_frame, textvariable=gitlab_repo_var, width=50)
+gitlab_repo_entry.grid(row=1, column=1, padx=5, pady=3, sticky="we")
+
+gitlab_ref_label = tk.Label(gitlab_frame, text="Ref:")
+gitlab_ref_label.grid(row=2, column=0, padx=5, pady=3, sticky="w")
+gitlab_ref_entry = tk.Entry(gitlab_frame, textvariable=gitlab_ref_var, width=50)
+gitlab_ref_entry.grid(row=2, column=1, padx=5, pady=3, sticky="we")
+
+gitlab_token_label = tk.Label(gitlab_frame, text="Access token:")
+gitlab_token_label.grid(row=3, column=0, padx=5, pady=3, sticky="w")
+gitlab_token_entry = tk.Entry(gitlab_frame, textvariable=gitlab_token_var, width=50)
+gitlab_token_entry.grid(row=3, column=1, padx=5, pady=3, sticky="we")
+
+# Direct download fields
+direct_frame = ttk.Frame(porthelper_frame)
+
+direct_url_label = tk.Label(direct_frame, text="Download URL:")
+direct_url_label.grid(row=0, column=0, padx=5, pady=3, sticky="w")
+direct_url_entry = tk.Entry(direct_frame, textvariable=direct_url_var, width=80)
+direct_url_entry.grid(row=0, column=1, padx=5, pady=3, sticky="we")
+
+# Buttons and result output
+button_download = tk.Button(porthelper_frame, text="SHA512", command=compute_sha512)
+button_download.grid(row=3, column=0, padx=5, pady=10, sticky="w")
+
+status_label = tk.Label(porthelper_frame, textvariable=download_status_var, fg="blue")
+status_label.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky="w")
+
+sha512_label = tk.Label(porthelper_frame, text="SHA512:")
+sha512_label.grid(row=5, column=0, padx=5, pady=3, sticky="w")
+sha512_entry = tk.Entry(porthelper_frame, textvariable=sha512_var, width=80)
+sha512_entry.grid(row=5, column=1, padx=5, pady=3, sticky="we")
+
+path_label = tk.Label(porthelper_frame, text="Local file:")
+path_label.grid(row=6, column=0, padx=5, pady=3, sticky="w")
+path_entry = tk.Entry(porthelper_frame, textvariable=download_path_var, width=80, state="readonly")
+path_entry.grid(row=6, column=1, padx=5, pady=3, sticky="we")
+
+porthelper_frame.grid_columnconfigure(1, weight=1)
+
+apply_placeholder(github_repo_entry, github_repo_var, placeholders["github_repo"])
+apply_placeholder(github_ref_entry, github_ref_var, placeholders["github_ref"])
+apply_placeholder(github_token_entry, github_token_var, placeholders["github_token"])
+apply_placeholder(gitlab_url_entry, gitlab_url_var, placeholders["gitlab_url"])
+apply_placeholder(gitlab_repo_entry, gitlab_repo_var, placeholders["gitlab_repo"])
+apply_placeholder(gitlab_ref_entry, gitlab_ref_var, placeholders["gitlab_ref"])
+apply_placeholder(gitlab_token_entry, gitlab_token_var, placeholders["gitlab_token"])
+apply_placeholder(direct_url_entry, direct_url_var, placeholders["direct_url"])
+
+show_resource_frame()
 
 # CMake tab
 cmake_frame = ttk.Frame(notebook)
