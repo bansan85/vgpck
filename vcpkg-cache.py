@@ -362,10 +362,30 @@ def choose_vcpkg_path():
         vcpkg_path_var.set(selected)
 
 
-def cleanup_buildtrees_build_only(vcpkg_path: Path):
+def get_path_size(path: Path) -> int:
+    total = 0
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            try:
+                total += entry.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def format_size(num_bytes: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if num_bytes < 1024:
+            return f"{num_bytes:.2f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.2f} PB"
+
+
+def cleanup_buildtrees_build_only(vcpkg_path: Path) -> int:
     buildtrees_path = vcpkg_path / "buildtrees"
+    freed_bytes = 0
     if not buildtrees_path.exists():
-        return
+        return freed_bytes
     for pkg_dir in buildtrees_path.iterdir():
         if not pkg_dir.is_dir():
             continue
@@ -374,7 +394,9 @@ def cleanup_buildtrees_build_only(vcpkg_path: Path):
                 continue
             if triplet_dir.name == "src":
                 continue
+            freed_bytes += get_path_size(triplet_dir)
             shutil.rmtree(triplet_dir, ignore_errors=True)
+    return freed_bytes
 
 
 def cleanup_vcpkg():
@@ -388,28 +410,33 @@ def cleanup_vcpkg():
         return
 
     choices: list[str] = []
+    freed_bytes = 0
     if downloads_var.get():
         downloads_path = vcpkg_path / "downloads"
         if downloads_path.exists():
+            freed_bytes += get_path_size(downloads_path)
             shutil.rmtree(downloads_path, ignore_errors=True)
             choices.append("downloads")
     if packages_var.get():
         packages_path = vcpkg_path / "packages"
         if packages_path.exists():
+            freed_bytes += get_path_size(packages_path)
             shutil.rmtree(packages_path, ignore_errors=True)
             choices.append("packages")
     if buildtrees_build_only_var.get():
-        cleanup_buildtrees_build_only(vcpkg_path)
+        freed_bytes += cleanup_buildtrees_build_only(vcpkg_path)
         choices.append("buildtrees (build only)")
     if buildtrees_build_and_sources_var.get():
         buildtrees_path = vcpkg_path / "buildtrees"
         if buildtrees_path.exists():
+            freed_bytes += get_path_size(buildtrees_path)
             shutil.rmtree(buildtrees_path, ignore_errors=True)
             choices.append("buildtrees (build and sources)")
 
     message = "Done."
     if choices:
         message += "\nItems deleted : " + ", ".join(choices)
+        message += f"\nDisk space freed : {format_size(freed_bytes)}"
     else:
         message += "\nNo items selected."
     messagebox.showinfo("Completed", message)
