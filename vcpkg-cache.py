@@ -24,6 +24,11 @@ if binary_cache is None:  # type: ignore
     sys.exit(0)
 
 
+class BuildEntry(NamedTuple):
+    abi: SimpleNamespace
+    zip_path: Path
+
+
 class VcpkgArchives:
     def __init__(self, path: str):
         self.path = path
@@ -31,8 +36,8 @@ class VcpkgArchives:
 
     def read_archives(self):
         zip_files = list(Path(self.path).rglob("*.zip"))
-        # Dict[package_name, Dict[date_of_build, abi_field]]
-        database: Dict[str, Dict[str, SimpleNamespace]] = {}
+        # Dict[package_name, Dict[date_of_build, BuildEntry]]
+        database: Dict[str, Dict[str, BuildEntry]] = {}
         for f in zip_files:
             with ZipFile(f, "r") as zf:
                 info = zf.getinfo("BUILD_INFO")
@@ -71,7 +76,9 @@ class VcpkgArchives:
 
                 if package_name not in database:
                     database[package_name] = {}
-                database[package_name][dt] = SimpleNamespace(**abi_dict)
+                database[package_name][dt] = BuildEntry(
+                    abi=SimpleNamespace(**abi_dict), zip_path=f
+                )
 
         self.database = database
 
@@ -81,6 +88,28 @@ class VcpkgArchives:
     def get_dates(self, package: str):
         dates = sorted(vcpkg_archives.database[package].keys())
         return [d for d in dates]
+
+    def delete_build(self, package: str, date: str) -> int:
+        freed_bytes = 0
+        zip_path = self.database[package][date].zip_path
+        try:
+            freed_bytes = zip_path.stat().st_size
+        except OSError:
+            freed_bytes = 0
+        try:
+            zip_path.unlink()
+        except OSError:
+            pass
+        del self.database[package][date]
+        if not self.database[package]:
+            del self.database[package]
+        return freed_bytes
+
+    def delete_package(self, package: str) -> int:
+        freed_bytes = 0
+        for date in list(self.database.get(package, {}).keys()):
+            freed_bytes += self.delete_build(package, date)
+        return freed_bytes
 
 
 class HistoryStruct(NamedTuple):
@@ -98,7 +127,7 @@ notebook = ttk.Notebook(root)
 package_frame = ttk.Frame(notebook)
 cleanup_frame = ttk.Frame(notebook)
 notebook.add(package_frame, text="Package comparison")
-notebook.add(cleanup_frame, text="Cleanup")
+notebook.add(cleanup_frame, text="Remove in vcpkg")
 notebook.pack(expand=True, fill="both")
 
 
@@ -253,13 +282,13 @@ def trace_date1_combo(var: str, index: str, mode: str):
         date_strs = [
             d
             for d in dates
-            if vcpkg_archives.database[pkg][date1_str].triplet
-            == vcpkg_archives.database[pkg][d].triplet
+            if vcpkg_archives.database[pkg][date1_str].abi.triplet
+            == vcpkg_archives.database[pkg][d].abi.triplet
         ]
         if (
             date2_str in vcpkg_archives.database[pkg]
-            and vcpkg_archives.database[pkg][date2_str].triplet
-            != vcpkg_archives.database[pkg][date1_str].triplet
+            and vcpkg_archives.database[pkg][date2_str].abi.triplet
+            != vcpkg_archives.database[pkg][date1_str].abi.triplet
         ):
             date2_combo_var.set("")
             date2_str = ""
@@ -328,10 +357,10 @@ def trace_same_triplet(var: str, index: str, mode: str):
         and date2_combo_var.get() != ""
         and vcpkg_archives.database[package_combo_var.get()][
             date1_combo_var.get()
-        ].triplet
+        ].abi.triplet
         != vcpkg_archives.database[package_combo_var.get()][
             date2_combo_var.get()
-        ].triplet
+        ].abi.triplet
     ):
         date2_combo_var.set("")
     history.save_state(
@@ -477,10 +506,202 @@ cb_buildtrees_both.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="w
 cb_packages = tk.Checkbutton(cleanup_frame, text="packages", variable=packages_var)
 cb_packages.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky="w")
 
-cleanup_button = tk.Button(cleanup_frame, text="Cleanup", command=cleanup_vcpkg)
+cleanup_button = tk.Button(cleanup_frame, text="Remove", command=cleanup_vcpkg)
 cleanup_button.grid(row=5, column=0, columnspan=3, padx=5, pady=10)
 
 cleanup_frame.grid_columnconfigure(1, weight=1)
+
+# Remove in cache tab
+removecache_frame = ttk.Frame(notebook)
+notebook.add(removecache_frame, text="Remove in cache")
+
+REMOVECACHE_CHECKED = "☑"
+REMOVECACHE_UNCHECKED = "☐"
+
+
+def removecache_checked_iids(tree: ttk.Treeview) -> List[str]:
+    return [
+        iid
+        for iid in tree.get_children("")
+        if tree.set(iid, "checked") == REMOVECACHE_CHECKED
+    ]
+
+
+def removecache_bind_checkbox_toggle(tree: ttk.Treeview):
+    def on_click(event: tk.Event):
+        if tree.identify_region(event.x, event.y) != "cell":
+            return
+        if tree.identify_column(event.x) != "#1":
+            return
+        row = tree.identify_row(event.y)
+        if not row:
+            return
+        current = tree.set(row, "checked")
+        tree.set(
+            row,
+            "checked",
+            REMOVECACHE_UNCHECKED
+            if current == REMOVECACHE_CHECKED
+            else REMOVECACHE_CHECKED,
+        )
+
+    tree.bind("<Button-1>", on_click)
+
+
+tk.Label(removecache_frame, text="Packages:").grid(
+    row=0, column=0, padx=5, pady=5, sticky="w"
+)
+tk.Label(removecache_frame, text="Build dates:").grid(
+    row=0, column=2, padx=5, pady=5, sticky="w"
+)
+
+removecache_package_tree = ttk.Treeview(
+    removecache_frame,
+    columns=("checked", "package"),
+    show="headings",
+    selectmode="browse",
+    height=10,
+)
+removecache_package_tree.heading("checked", text="")
+removecache_package_tree.heading("package", text="Package")
+removecache_package_tree.column("checked", width=30, stretch=False, anchor="center")
+removecache_package_tree.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
+
+removecache_package_scrollbar = ttk.Scrollbar(
+    removecache_frame, orient="vertical", command=removecache_package_tree.yview
+)
+removecache_package_scrollbar.grid(row=1, column=1, sticky="ns")
+removecache_package_tree.configure(yscrollcommand=removecache_package_scrollbar.set)
+
+removecache_date_tree = ttk.Treeview(
+    removecache_frame,
+    columns=("checked", "date"),
+    show="headings",
+    selectmode="browse",
+    height=10,
+)
+removecache_date_tree.heading("checked", text="")
+removecache_date_tree.heading("date", text="Build date")
+removecache_date_tree.column("checked", width=30, stretch=False, anchor="center")
+removecache_date_tree.grid(row=1, column=2, padx=5, pady=5, sticky="nsew")
+
+removecache_date_scrollbar = ttk.Scrollbar(
+    removecache_frame, orient="vertical", command=removecache_date_tree.yview
+)
+removecache_date_scrollbar.grid(row=1, column=3, sticky="ns")
+removecache_date_tree.configure(yscrollcommand=removecache_date_scrollbar.set)
+
+tk.Label(removecache_frame, text="Build details:").grid(
+    row=2, column=0, columnspan=4, padx=5, pady=5, sticky="w"
+)
+
+removecache_preview_tree = ttk.Treeview(
+    removecache_frame, columns=("key", "value"), show="headings", height=10
+)
+removecache_preview_tree.heading("key", text="Key")
+removecache_preview_tree.heading("value", text="Value")
+removecache_preview_tree.grid(
+    row=3, column=0, columnspan=4, padx=5, pady=5, sticky="nsew"
+)
+
+removecache_preview_scrollbar = ttk.Scrollbar(
+    removecache_frame, orient="vertical", command=removecache_preview_tree.yview
+)
+removecache_preview_scrollbar.grid(row=3, column=4, sticky="ns")
+removecache_preview_tree.configure(yscrollcommand=removecache_preview_scrollbar.set)
+
+removecache_frame.grid_rowconfigure(1, weight=1)
+removecache_frame.grid_rowconfigure(3, weight=1)
+removecache_frame.grid_columnconfigure(0, weight=1)
+removecache_frame.grid_columnconfigure(2, weight=1)
+
+
+def refresh_removecache_preview():
+    removecache_preview_tree.delete(*removecache_preview_tree.get_children())
+    pkg_sel = removecache_package_tree.selection()
+    date_sel = removecache_date_tree.selection()
+    if not pkg_sel or not date_sel:
+        return
+    pkg, date = pkg_sel[0], date_sel[0]
+    if pkg not in vcpkg_archives.database or date not in vcpkg_archives.database[pkg]:
+        return
+    abi_dict = vars(vcpkg_archives.database[pkg][date].abi)
+    for key, val in sorted(abi_dict.items()):
+        removecache_preview_tree.insert("", "end", values=(key, val))
+
+
+def refresh_removecache_dates():
+    removecache_date_tree.delete(*removecache_date_tree.get_children())
+    pkg_sel = removecache_package_tree.selection()
+    if pkg_sel and pkg_sel[0] in vcpkg_archives.database:
+        for date in vcpkg_archives.get_dates(pkg_sel[0]):
+            removecache_date_tree.insert(
+                "", "end", iid=date, values=(REMOVECACHE_UNCHECKED, date)
+            )
+    refresh_removecache_preview()
+
+
+def refresh_removecache_packages():
+    removecache_package_tree.delete(*removecache_package_tree.get_children())
+    for pkg in vcpkg_archives.sorted_packages():
+        removecache_package_tree.insert(
+            "", "end", iid=pkg, values=(REMOVECACHE_UNCHECKED, pkg)
+        )
+    refresh_removecache_dates()
+
+
+removecache_package_tree.bind(
+    "<<TreeviewSelect>>", lambda event: refresh_removecache_dates()
+)
+removecache_date_tree.bind(
+    "<<TreeviewSelect>>", lambda event: refresh_removecache_preview()
+)
+removecache_bind_checkbox_toggle(removecache_package_tree)
+removecache_bind_checkbox_toggle(removecache_date_tree)
+
+
+def sync_package_combo_after_delete():
+    package_combo["values"] = vcpkg_archives.sorted_packages()
+    pkg = package_combo_var.get()
+    if pkg not in vcpkg_archives.database:
+        pkg = ""
+    package_combo_var.set(pkg)
+
+
+def remove_from_cache():
+    checked_packages = removecache_checked_iids(removecache_package_tree)
+    if checked_packages:
+        freed = sum(vcpkg_archives.delete_package(pkg) for pkg in checked_packages)
+        message = "Done.\nPackages removed : " + ", ".join(checked_packages)
+        message += f"\nDisk space freed : {format_size(freed)}"
+        messagebox.showinfo("Completed", message)
+        refresh_removecache_packages()
+        sync_package_combo_after_delete()
+        return
+
+    pkg_sel = removecache_package_tree.selection()
+    checked_dates = removecache_checked_iids(removecache_date_tree)
+    if pkg_sel and checked_dates:
+        pkg = pkg_sel[0]
+        freed = sum(vcpkg_archives.delete_build(pkg, date) for date in checked_dates)
+        message = f"Done.\nBuilds removed for {pkg} : " + ", ".join(checked_dates)
+        message += f"\nDisk space freed : {format_size(freed)}"
+        messagebox.showinfo("Completed", message)
+        refresh_removecache_packages()
+        sync_package_combo_after_delete()
+        return
+
+    messagebox.showwarning(
+        "No items selected", "Please check at least one package or build to remove."
+    )
+
+
+removecache_button = tk.Button(
+    removecache_frame, text="Remove", command=remove_from_cache
+)
+removecache_button.grid(row=4, column=0, columnspan=4, padx=5, pady=10)
+
+refresh_removecache_packages()
 
 # Port helper tab
 porthelper_frame = ttk.Frame(notebook)
@@ -1218,12 +1439,12 @@ def update_table(var: str, index: str, mode: str):
 
     date1_idx = dates.index(date1_str)
     date1 = dates[date1_idx]
-    dict1 = vars(vcpkg_archives.database[pkg][date1])
+    dict1 = vars(vcpkg_archives.database[pkg][date1].abi)
 
     if date2_str:
         date2_idx = dates.index(date2_str)
         date2 = dates[date2_idx]
-        dict2 = vars(vcpkg_archives.database[pkg][date2])
+        dict2 = vars(vcpkg_archives.database[pkg][date2].abi)
 
         all_keys = set(dict1.keys()) | set(dict2.keys())
         for key in sorted(all_keys):
@@ -1262,7 +1483,7 @@ def on_double_click(event: tk.Event):
     date2 = None
 
     for date in dates:
-        abi_dict = vars(vcpkg_archives.database[key][date])
+        abi_dict = vars(vcpkg_archives.database[key][date].abi)
         # Assuming sha is stored in a specific key, adjust as needed
         for _, abi_value in abi_dict.items():
             if sha1 and abi_value == sha1:
